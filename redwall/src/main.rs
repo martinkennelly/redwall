@@ -18,8 +18,6 @@ use cidr;
 
 #[derive(Debug, Parser)]
 struct Opt {
-    #[clap(short, long, default_value = "eth0")]
-    iface: String,
     #[clap(short, long, default_value= "blocklist.yaml")]
     filename: String,  
 }
@@ -39,12 +37,14 @@ fn run(opt: &Opt) -> Result<(), Box<dyn Error>> {
 
    let yaml: &Yaml = yamls.get(0).unwrap();
 
-   if !is_yaml_valid(&yaml) {
+   if !is_yaml_valid(yaml) {
     panic!("YAML file supplied is not valid");
    }
 
+   let interfaces: Vec<&str> = get_interfaces(yaml);
+
    let mut bpf_prog = load_bpf_prog();
-   attach_bpf_prog(&mut bpf_prog, &opt, )?;
+   attach_bpf_prog(&mut bpf_prog, &interfaces)?;
 
    insert_ipv4_hashmap(&bpf_prog, yaml, "IPV4_BLOCKLIST")?;
 
@@ -57,7 +57,19 @@ fn is_yaml_valid(doc: &Yaml) -> bool {
     if !at_least_one_fromcidrs_exists(&doc) {
         return false
     }
+
+    if !at_least_one_interface_exists(&doc) {
+        return false;
+    }
     true
+}
+
+fn get_interfaces(yaml: &Yaml) -> Vec<&str> {
+    return yaml["interfaces"].as_vec()
+    .unwrap()
+    .iter()
+    .map(|i| { i.as_str().unwrap()})
+    .collect();
 }
 
 fn at_least_one_fromcidrs_exists(doc: &Yaml) -> bool {
@@ -65,7 +77,21 @@ fn at_least_one_fromcidrs_exists(doc: &Yaml) -> bool {
     if doc["ingress"][0]["fromCIDRS"].is_badvalue() {
         return false;
     }
-    doc["ingress"][0]["fromCIDRS"].as_vec().unwrap().len() > 0
+
+    match doc["ingress"][0]["fromCIDRS"].as_vec() {
+        Some(v) => return v.len() > 0,
+        None => return false
+    };
+}
+
+fn at_least_one_interface_exists(doc: &Yaml) -> bool {
+    if doc["interfaces"].is_badvalue() {
+        return false
+    }
+    match doc["interfaces"].as_vec() {
+        Some(v) => return v.len() > 0,
+        None => return false,
+    };
 }
 
 fn get_ipv4_fromcidrs_as_ints(doc: &Yaml) -> Vec<u32> {
@@ -110,12 +136,15 @@ fn load_bpf_prog() -> Bpf {
     bpf
 }
 
-fn attach_bpf_prog(bpf: &mut Bpf, opt: &Opt) -> Result<(), anyhow::Error> {
+fn attach_bpf_prog(bpf: &mut Bpf, interfaces: &Vec<&str>) -> Result<(), anyhow::Error> {
      //BpfLogger::init(&mut bpf)?;
      let program: &mut Xdp = bpf.program_mut("redwall").unwrap().try_into().unwrap();
      program.load()?;
-     program.attach(&opt.iface, XdpFlags::default())
+     for &interface in interfaces {
+        program.attach(interface, XdpFlags::default())
          .context("failed to attach the XDP program with default flags - try changing XdpFlags::default() to XdpFlags::SKB_MODE")?;
+     }
+
      Ok(())
 }
 
