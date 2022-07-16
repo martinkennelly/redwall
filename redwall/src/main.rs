@@ -1,7 +1,8 @@
 use std::{fs, str::FromStr};
 use std::error::Error;
-use std::net;
+use std::{net, process};
 
+use redwall::NodeFirewallDocs;
 use redwall_common::PacketLog;
 
 use aya::{include_bytes_aligned, Bpf, maps::{HashMap, perf::AsyncPerfEventArray}};
@@ -27,13 +28,28 @@ fn main() -> Result<(), Box<dyn Error>> {
     run(&opt)
 }
 
-fn run(opt: &Opt) -> Result<(), Box<dyn Error>> {   
+fn run(opt: &Opt) -> Result<(), Box<dyn Error>> {
+   let docs = NodeFirewallDocs::new(&opt.filename).unwrap_or_else(|err| {
+    eprintln!("Problem parsing yaml file {}: {}", opt.filename, err);
+    process::exit(1);
+   });
+   docs.validate().unwrap_or_else(|error| {
+    eprintln!("Problem validating yaml file {}: {}", opt.filename, error);
+    process::exit(2);
+   });
+   let (eps, fws) = docs.get_eps_and_fws();
+
+   if eps.is_empty() || fws.is_empty() {
+    panic!("node endpoints or ingress node firewall are empty")
+   }
+
    let file_contents: String = fs::read_to_string(&opt.filename)?;  
    let yamls: Vec<Yaml> = YamlLoader::load_from_str(&file_contents)?;
 
-   if yamls.is_empty() {
-       panic!("Empty YAML supplied");
-   }
+//    NOTE: This (and much more!) have been validated via docs.validate() above
+//    if yamls.is_empty() {
+//     panic!("Empty YAML supplied");
+//    }
 
    let yaml: &Yaml = yamls.get(0).unwrap();
 
