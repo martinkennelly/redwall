@@ -22,21 +22,34 @@ cargo build
 ```
 
 ## Run
+Create a yaml to define the source IP CIDRs you wish to allow or deny.
+Also, you must define rules for any `fromCIDRS` defined. Rules contain order with lower order integers taking precidence over higher order integers.
+A rule for ports is optional, and if not defined, all ports are selected.
 
-Create a yaml to define the source IP CIDRs you wish to block.
 ```yaml
+interfaces:
+- eth0
+- eth2
 ingress:
 - fromCIDRS:
      - 1.1.1.0/24
      - 2.2.2.0/24
-     ...
+  rules:
+    - order: 10
+      protocol: tcp
+      ports: [800,8000]
+      action: allow
+    - order: 20
+      protocol: udp      
+      action: deny
+    - order: 30
+      protocol: tcp
+      action: deny
+    - order: 40
+      protocol: icmp
+      action: deny
 ```
 
 ```bash
-cargo xtask run -- --filename /tmp/blocklist.yaml --iface eth0
+cargo xtask run -- --filename /tmp/blocklist.yaml
 ```
-
-
-# Demo
-[![asciicast](https://asciinema.org/a/WZyahQwVoO6GbZWG8QDgcdbRK.svg)](https://asciinema.org/a/WZyahQwVoO6GbZWG8QDgcdbRK)
-
