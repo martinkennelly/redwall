@@ -76,6 +76,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         });
     }
 
+    let mut old_rules = cidr_rule_map.clone();
+
     task::spawn(async move {
         loop {
             match receiver.recv() {
@@ -122,15 +124,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     link_ids = match attach_bpf_interfaces(&mut bpf_prog, &interfaces) {
                         Ok(v) => v,
                         Err(e) => {
-                            eprintln!("Unable to attach BPF program: {}", e.to_string());
-                            continue;
+                            panic!("Unable to attach BPF program: {}", e.to_string());
                         }
                     };
 
+                    if let Err(e) = del_fromcidr_rules_bpf_map(&bpf_prog, &old_rules, "IPV4_BLOCKLIST") {
+                        panic!("Encountered errors deleting entries in BPF map: {}", e.to_string());
+                    }
+                    old_rules = cidr_rule_map.clone();
+
                     if let Err(e) = add_fromcidr_rules_bpf_map(&bpf_prog, &cidr_rule_map, "IPV4_BLOCKLIST") {
-                        eprintln!("Encountered errors updating BPF map: {}", e.to_string());
-                        continue;
-                    }                    
+                        panic!("Encountered errors updating BPF map: {}", e.to_string());
+                    }
                 },
                 Err(e) => {
                     eprintln!("Error watching file: {}", e.to_string());
@@ -509,6 +514,22 @@ fn add_fromcidr_rules_bpf_map(bpf_prog: &Bpf, cidr_rules: &stdHashMap<Ipv4Cidr, 
     }
 
     Ok(())
+}
+
+fn del_fromcidr_rules_bpf_map(bpf_prog: &Bpf, cidr_rules: &stdHashMap<Ipv4Cidr, [redwall_common::Rules; redwall_common::RULES_MAX_SIZE]>, hashmap_name: &str) -> Result<(), anyhow::Error> {
+    let blocklist: LpmTrie<_, u32, [redwall_common::Rules; redwall_common::RULES_MAX_SIZE]> = LpmTrie::try_from(bpf_prog.map_mut(hashmap_name)?)?;
+
+    for (cidr, rules) in *&cidr_rules {
+        let key = Key::new(cidr.network_length().into(), u32::from(cidr.first_address()).to_be());
+
+        match blocklist.remove(&key) {
+            Ok(_) => {},
+            Err(e) => panic!("Deleting rules caused error when deleting cidr {}: {:?}", cidr.to_string(), e),
+        }
+    }
+
+    Ok(())
+
 }
 
 fn i64_to_u16(i: i64) -> Result<u16, Box<dyn Error>> {
