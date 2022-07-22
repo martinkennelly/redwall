@@ -67,8 +67,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     let data = unsafe { ptr.read_unaligned() };
                     let src_address = net::Ipv4Addr::from(data.ipv4_address);
                     match data.action {
-                        1 => println!("SRC {}, PROTOCOL {:?}, DESTINATION PORT {}: deny", src_address, data.protocol, data.dest_port),
-                        2 => println!("SRC {}, PROTOCOL {:?}, DESTINATION PORT {}: allow", src_address, data.protocol, data.dest_port),
+                        1 => println!("PROCESS TIME: {}, SRC {}, PROTOCOL {:?}, DESTINATION PORT {}: deny", data.process_time, src_address, data.protocol, data.dest_port),
+                        2 => println!("PROCESS TIME: {}, SRC {}, PROTOCOL {:?}, DESTINATION PORT {}: allow", data.process_time, src_address, data.protocol, data.dest_port),
                         _ => println!("Unexpected ACTION"),
                     }
                 }

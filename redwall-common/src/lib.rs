@@ -5,7 +5,8 @@ pub struct PacketLog {
     pub ipv4_address: u32,
     pub protocol: Protocol,
     pub action: u32,
-    pub dest_port: u32,    
+    pub dest_port: u32,
+    pub process_time: u64,
 }
 
 #[cfg(feature = "user")]

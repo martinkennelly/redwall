@@ -10,7 +10,7 @@ use aya_bpf::{
     bindings::xdp_action,
     macros::{xdp,map},
     maps::{PerfEventArray, LpmTrie, lpm_trie::Key},
-    programs::XdpContext, helpers::bpf_loop,
+    programs::XdpContext, helpers::bpf_ktime_get_ns,
 };
 mod bindings;
 use bindings::{ethhdr, iphdr, tcphdr};
@@ -41,6 +41,8 @@ pub fn redwall(ctx: XdpContext) -> u32 {
 }
 
 unsafe fn xdp_firewall(ctx: XdpContext) -> Result<u32, ()> {
+    let start = bpf_ktime_get_ns();
+
     let h_proto = u16::from_be({
         *ptr_at(&ctx, offset_of!(ethhdr, h_proto))?
     });
@@ -74,11 +76,14 @@ unsafe fn xdp_firewall(ctx: XdpContext) -> Result<u32, ()> {
         xdp_action::XDP_PASS
     };
 
+    let duration = bpf_ktime_get_ns() - start;
+
     let log_event = PacketLog{
         ipv4_address: source_ip_address,
         protocol: protocol,
-        action: action,
         dest_port: dest_port.try_into().unwrap(),
+        action: action,
+        process_time: duration,
     };
 
     EVENTS.output(&ctx, &log_event, 0);
