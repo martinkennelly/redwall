@@ -1,3 +1,4 @@
+use core::num;
 use std::fmt::Debug;
 use std::{fs, str::FromStr};
 use std::error::Error;
@@ -6,7 +7,7 @@ use std::collections::HashMap as stdHashMap;
 use std::sync::mpsc::channel;
 use std::time::Duration;
 
-use redwall_common::PacketLog;
+use redwall_common::{PacketLog, FALSE, TRUE};
 
 use notify::{Watcher, RecursiveMode, watcher};
 use aya::{include_bytes_aligned, Bpf, util::online_cpus, maps::{lpm_trie::{LpmTrie,Key}, perf::AsyncPerfEventArray}, programs::{Xdp, XdpFlags, xdp::XdpLinkId}};
@@ -42,7 +43,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let cidr_rule_map = process_fromcidrs_rules(yaml)?;
     let mut bpf_prog = get_bpf_prog();
     load_bpf_prog(&mut bpf_prog)?;
-    let mut link_ids = attach_bpf_interfaces(&mut bpf_prog, &interfaces)?;
+    let mut link_ids = attach_bpf_interfaces(&mut bpf_prog, &interfaces)?;    
     add_fromcidr_rules_bpf_map(&bpf_prog, &cidr_rule_map, "IPV4_BLOCKLIST")?;
 
     let (sender, receiver) = channel();
@@ -67,8 +68,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     let data = unsafe { ptr.read_unaligned() };
                     let src_address = net::Ipv4Addr::from(data.ipv4_address);
                     match data.action {
-                        1 => println!("PROCESS TIME: {}, SRC {}, PROTOCOL {:?}, DESTINATION PORT {}: deny", data.process_time, src_address, data.protocol, data.dest_port),
-                        2 => println!("PROCESS TIME: {}, SRC {}, PROTOCOL {:?}, DESTINATION PORT {}: allow", data.process_time, src_address, data.protocol, data.dest_port),
+                        1 => println!("PROCESS TIME: {} ns, PREFIX HIT: {}, SRC {}, PROTOCOL {:?}, DESTINATION PORT {}: deny", data.process_time, data.prefix_hit, src_address, data.protocol, data.dest_port),
+                        2 => println!("PROCESS TIME: {} ns, PREFIX HIT: {}, SRC {}, PROTOCOL {:?}, DESTINATION PORT {}: allow", data.process_time, data.prefix_hit, src_address, data.protocol, data.dest_port),
                         _ => println!("Unexpected ACTION"),
                     }
                 }
@@ -131,7 +132,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     if let Err(e) = del_fromcidr_rules_bpf_map(&bpf_prog, &old_rules, "IPV4_BLOCKLIST") {
                         panic!("Encountered errors deleting entries in BPF map: {}", e.to_string());
                     }
-                    old_rules = cidr_rule_map.clone();
+                    old_rules = cidr_rule_map.clone();                    
 
                     if let Err(e) = add_fromcidr_rules_bpf_map(&bpf_prog, &cidr_rule_map, "IPV4_BLOCKLIST") {
                         panic!("Encountered errors updating BPF map: {}", e.to_string());
@@ -280,8 +281,9 @@ fn process_rules(yaml: &Yaml) -> Result<[redwall_common::Rules; redwall_common::
             return Err("Number of ports supplied exceeded maximum allowed".into());
         };
 
-        let mut ports_arr = [redwall_common::EMPTY_PORT; redwall_common::PORTS_MAX_SIZE];
+        let mut ports_arr = [0; redwall_common::PORTS_MAX_SIZE];
         let mut ports_arr_index = 0;
+        let mut number_ports: u8 = 0;
 
         for entry in dest_ports {
             let entry = match entry.as_i64() {
@@ -296,7 +298,13 @@ fn process_rules(yaml: &Yaml) -> Result<[redwall_common::Rules; redwall_common::
 
             ports_arr[ports_arr_index] = port;
             ports_arr_index += 1;
+            number_ports += 1;
         }
+        let mut is_empty: u8 = TRUE;
+        if ports_arr_index > 0 {
+            is_empty = FALSE;
+        }
+        let ports = redwall_common::Ports{is_empty: is_empty, len: number_ports, dest_port: ports_arr};
 
         let action_raw = match rule["action"].as_str() {
             Some(v) => v,
@@ -315,7 +323,7 @@ fn process_rules(yaml: &Yaml) -> Result<[redwall_common::Rules; redwall_common::
         rules_arr[rules_arr_index] = redwall_common::Rules{
             order: order,
             proto: proto,
-            dest_port: ports_arr,
+            ports: ports,
             action: action,
             valid: true,
         };

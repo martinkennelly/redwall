@@ -7,6 +7,7 @@ pub struct PacketLog {
     pub action: u32,
     pub dest_port: u32,
     pub process_time: u64,
+    pub prefix_hit: u64,
 }
 
 #[cfg(feature = "user")]
@@ -31,19 +32,28 @@ pub struct Rules {
     pub order: u64,
     pub proto: Protocol,
     pub action: Action,
-    pub dest_port: [u16; PORTS_MAX_SIZE],
+    pub ports: Ports,
     pub valid: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct Ports {
+    // will be 0 if empty, otherwise 1
+    pub is_empty: u8,
+    pub len: u8,
+    pub dest_port: [u16; PORTS_MAX_SIZE],
 }
 
 impl Rules {
     pub fn new() -> Rules {
-        Rules { order: u64::MAX, proto: Protocol::Unsupported, action: Action::Allow, dest_port: [EMPTY_PORT; PORTS_MAX_SIZE], valid: false }
+        Rules { order: u64::MAX, proto: Protocol::Unsupported, action: Action::Allow, ports: Ports { is_empty: TRUE, len: 0, dest_port: [0; PORTS_MAX_SIZE] }, valid: false }
     }
 }
 
 #[cfg(feature = "user")]
 unsafe impl aya::Pod for Rules {}
 
-pub const RULES_MAX_SIZE: usize = 8;
-pub const PORTS_MAX_SIZE: usize = 4;
-pub const EMPTY_PORT: u16 = 0;
+pub const RULES_MAX_SIZE: usize = 4;
+pub const PORTS_MAX_SIZE: usize = 2;
+pub const FALSE: u8 = 0;
+pub const TRUE: u8 = 1;

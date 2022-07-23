@@ -4,7 +4,7 @@
 use core::mem;
 use memoffset::offset_of;
 
-use redwall_common::PacketLog;
+use redwall_common::{PacketLog, FALSE};
 
 use aya_bpf::{
     bindings::xdp_action,
@@ -70,11 +70,18 @@ unsafe fn xdp_firewall(ctx: XdpContext) -> Result<u32, ()> {
         *ptr_at(&ctx, L4_OFF + offset_of!(tcphdr, dest))?
     });
 
-    let action = if is_blocked(source_ip_address, protocol, dest_port) {
-        xdp_action::XDP_DROP
-    } else {
-        xdp_action::XDP_PASS
-    };
+    let mut action = xdp_action::XDP_DROP;
+    let mut prefix_hit = 32;
+    for prefix_len in (0..33).rev() {
+        prefix_hit = prefix_len;
+        if let Some(v) = is_allowed(prefix_len, source_ip_address, protocol, dest_port) {
+            if v {
+                action = xdp_action::XDP_PASS;
+                prefix_hit = prefix_len;          
+            }
+            break;
+        }
+    }
 
     let duration = bpf_ktime_get_ns() - start;
 
@@ -84,6 +91,7 @@ unsafe fn xdp_firewall(ctx: XdpContext) -> Result<u32, ()> {
         dest_port: dest_port.try_into().unwrap(),
         action: action,
         process_time: duration,
+        prefix_hit: prefix_hit.into(),
     };
 
     EVENTS.output(&ctx, &log_event, 0);
@@ -103,58 +111,56 @@ unsafe fn ptr_at<T>(ctx: &XdpContext, offset: usize) -> Result<*const T, ()> {
     Ok((start + offset) as *const T)
 }
 
-fn is_blocked(source_addr: u32, protocol: redwall_common::Protocol, dest_port: u16) -> bool {    
-    let key = Key::new(32, source_addr.to_be());
+fn is_allowed(prefix_len: u32, source_addr: u32, protocol: redwall_common::Protocol, dest_port: u16) -> Option<bool> {
+
+    let key = Key::new(prefix_len, source_addr.to_be());
     unsafe {
         let rules = BLOCKLIST.get(&key);
 
         if rules.is_none() {
-            // didn't find any entry so we allow by default
-            return false;
+            return None;
         }
 
-        for rule in rules.unwrap() {
-            // we need this ugly valid check because we must know at compile time the size of the array
-            //TODO(mk): investigate a linked list or other data struct that we don't need to know at compile time
-            if !rule.valid {
-                continue;
-            }
+        let rules = rules.unwrap();
 
-            if rule.proto != protocol {
-                continue;
-            }
+        return get_rules_result(protocol, dest_port, rules);
 
-            let mut empty_port_count = 0;
-            let mut found = false;
-            for port in rule.dest_port {
-                if port == dest_port {
-                    found = true;
-                    break;
-                }
-                // we assume any ports that are zero are invalid and they represent null or not a port. If all elements in array are 0, no ports were defined.
-                if port == redwall_common::EMPTY_PORT {
-                    empty_port_count += 1;
-                }
-            }
-            if !found && empty_port_count != rule.dest_port.len() {
-                continue;
-            }
-
-            if rule.action == redwall_common::Action::Deny {
-                return true;
-            }
-
-            if rule.action == redwall_common::Action::Allow {
-                return false;
-            }
-        }
     };
-
-    //allow by default
-    false
+    None
 }
 
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {
     unsafe { core::hint::unreachable_unchecked() }
+}
+
+fn get_rules_result(protocol: redwall_common::Protocol, dest_port: u16, rules: &[redwall_common::Rules; redwall_common::RULES_MAX_SIZE]) -> Option<bool> {
+    for rule in rules {
+        // we need this ugly valid check because we must know at compile time the size of the array
+        //TODO(mk): investigate a linked list or other data struct that we don't need to know at compile time
+        if !rule.valid {
+            break;
+        }
+
+        if rule.proto != protocol {
+            continue;
+        }
+
+        if protocol != redwall_common::Protocol::ICMP {
+            if rule.ports.is_empty == FALSE {
+                if !rule.ports.dest_port.contains(&dest_port) {
+                    continue;
+                }
+            }
+        }
+
+        if rule.action == redwall_common::Action::Deny {
+            return Some(false);
+        }
+
+        if rule.action == redwall_common::Action::Allow {
+            return Some(true);
+        }
+    }
+    None
 }
